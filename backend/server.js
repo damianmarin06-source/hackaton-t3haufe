@@ -1,14 +1,7 @@
-require("dotenv").config();
-
-const fs = require("fs").promises;
-const path = require("path");
-const { exec } = require("child_process");
-
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const cors = require("cors");
-const OpenAI = require("openai");
 
 const app = express();
 app.use(cors());
@@ -16,13 +9,7 @@ app.use(cors());
 const server = http.createServer(app);
 
 const io = new Server(server, {
-  cors: {
-    origin: "*",
-  },
-});
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  cors: { origin: "*" },
 });
 
 // ROOM STATE
@@ -37,31 +24,18 @@ io.on("connection", (socket) => {
 
     if (!rooms[roomId]) {
       rooms[roomId] = {
-        code: "print('Hello Hackathon!')",
+        code: "print('Hello Hackathon! Piston API is working!')",
         users: [],
       };
     }
 
-    const exists = rooms[roomId].users.find(
-      (u) => u.id === socket.id
-    );
-
+    const exists = rooms[roomId].users.find((u) => u.id === socket.id);
     if (!exists) {
-      rooms[roomId].users.push({
-        id: socket.id,
-        username,
-      });
+      rooms[roomId].users.push({ id: socket.id, username });
     }
 
-    socket.emit(
-      "receive_code",
-      rooms[roomId].code
-    );
-
-    io.to(roomId).emit(
-      "users_update",
-      rooms[roomId].users
-    );
+    socket.emit("receive_code", rooms[roomId].code);
+    io.to(roomId).emit("users_update", rooms[roomId].users);
   });
 
   // LIVE CODE SYNC
@@ -71,178 +45,72 @@ io.on("connection", (socket) => {
       if (!rooms[roomId]) return;
 
       rooms[roomId].code = code;
-
-      socket.to(roomId).emit(
-        "receive_code",
-        code
-      );
+      socket.to(roomId).emit("receive_code", code);
     }
   );
 
   // MULTI CURSOR
-  socket.on(
-    "cursor_move",
-    ({ roomId, username, position }) => {
-      socket.to(roomId).emit(
-        "receive_cursor",
-        {
-          username,
-          position,
-        }
-      );
-    }
-  );
+  socket.on("cursor_move", ({ roomId, username, position }) => {
+    socket.to(roomId).emit("receive_cursor", { username, position });
+  });
 
-  // AI REQUEST
-  socket.on(
-    "ai_request",
-    async ({ roomId, code }) => {
-      console.log(
-        "AI REQUEST:",
-        roomId
-      );
+  // RUN CODE (Using the free Piston API)
+  socket.on("run_code", async ({ roomId, code, input }) => {
+    io.to(roomId).emit("code_output", `> Sending code to Piston API...\n`);
 
-      try {
-        const completion =
-          await openai.chat.completions.create(
+    try {
+      // We use the native fetch API to send the code to Piston
+      const response = await fetch("https://emkc.org/api/v2/piston/execute", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          language: "python",
+          version: "3.10", // Piston uses Python 3.10
+          files: [
             {
-              model: "gpt-4o-mini",
-              messages: [
-                {
-                  role: "system",
-                  content:
-                    "You are an AI pair-programming assistant inside a collaborative IDE. Return ONLY raw code suggestions. No markdown, no backticks, no explanations.",
-                },
-                {
-                  role: "user",
-                  content: code,
-                },
-              ],
-            }
-          );
+              name: "main.py",
+              content: code,
+            },
+          ],
+          stdin: input || "", // Pass the standard input here
+        }),
+      });
 
-        const suggestion =
-          completion.choices[0].message
-            .content;
+      const result = await response.json();
+      let outputMessage = "";
 
-        io.to(roomId).emit(
-          "ai_suggestion",
-          suggestion
-        );
-      } catch (error) {
-        console.error(
-          "AI ERROR:",
-          error
-        );
+      // Handle Piston API specific responses
+      if (result.message) {
+        outputMessage = `> ❌ API ERROR:\n${result.message}\n`;
+      } else if (result.run) {
+        outputMessage = `> STDOUT:\n${result.run.stdout}\n`;
+        if (result.run.stderr) {
+          outputMessage += `> STDERR:\n${result.run.stderr}\n`;
+        }
+        if (result.run.signal === "SIGKILL") {
+          outputMessage += `> 🚨 TIMEOUT ERROR: Execution took too long or crashed.\n`;
+        }
+      } else {
+        outputMessage = `> ❌ UNKNOWN ERROR:\nCould not parse response.\n`;
       }
+
+      outputMessage += `\n> Execution complete 🚀`;
+      io.to(roomId).emit("code_output", outputMessage);
+
+    } catch (err) {
+      console.error("Piston API error:", err);
+      io.to(roomId).emit("code_output", `> ❌ NETWORK ERROR: Could not reach the execution engine.\n`);
     }
-  );
+  });
 
-  // RUN CODE IN DOCKER
-  socket.on(
-    "run_code",
-    async ({
-      roomId,
-      code,
-      input,
-    }) => {
-      io.to(roomId).emit(
-        "code_output",
-        "> Running Python 3 in Docker...\n"
-      );
-
-      const uniqueId = `run_${Date.now()}_${socket.id}`;
-      const runDir = path.join(
-        process.cwd(),
-        uniqueId
-      );
-
-      try {
-        await fs.mkdir(runDir, {
-          recursive: true,
-        });
-
-        const codeFile = "main.py";
-        const inputFile = "input.txt";
-
-        await fs.writeFile(
-          path.join(runDir, codeFile),
-          code
-        );
-
-        await fs.writeFile(
-          path.join(runDir, inputFile),
-          input || ""
-        );
-
-        const cmd = `docker run --rm -v "${runDir}:/app" -w /app python:3.11-slim sh -c "python ${codeFile} < ${inputFile}"`;
-
-        exec(
-          cmd,
-          { timeout: 30000 },
-          async (
-            error,
-            stdout,
-            stderr
-          ) => {
-            let outputMessage = "";
-
-            if (error) {
-              if (error.killed) {
-                outputMessage =
-                  "> 🚨 TIMEOUT ERROR: Execution exceeded 30 seconds.\n";
-
-                exec(
-                  `docker ps -q --filter ancestor=python:3.11-slim | xargs -r docker kill`
-                );
-              } else {
-                outputMessage = `> ❌ RUNTIME ERROR:\n${
-                  stderr ||
-                  error.message
-                }\n`;
-              }
-            } else {
-              outputMessage = `> STDOUT:\n${stdout}\n`;
-
-              if (stderr) {
-                outputMessage += `> STDERR:\n${stderr}\n`;
-              }
-            }
-
-            outputMessage +=
-              "\n> Execution complete 🚀";
-
-            io.to(roomId).emit(
-              "code_output",
-              outputMessage
-            );
-
-            await fs
-              .rm(runDir, {
-                recursive: true,
-                force: true,
-              })
-              .catch(console.error);
-          }
-        );
-      } catch (err) {
-        console.error(
-          "DOCKER ERROR:",
-          err
-        );
-
-        io.to(roomId).emit(
-          "code_output",
-          "> ❌ SERVER ERROR: Could not create execution sandbox.\n"
-        );
-
-        await fs
-          .rm(runDir, {
-            recursive: true,
-            force: true,
-          })
-          .catch(() => {});
-      }
+  // DISCONNECT
+  socket.on("disconnect", () => {
+    console.log("User disconnected:", socket.id);
+    for (let roomId in rooms) {
+      rooms[roomId].users = rooms[roomId].users.filter((u) => u.id !== socket.id);
+      io.to(roomId).emit("users_update", rooms[roomId].users);
     }
   );
 
@@ -270,8 +138,8 @@ io.on("connection", (socket) => {
   });
 });
 
-server.listen(5000, () => {
-  console.log(
-    "🔥 WebSocket + AI + Docker Sandbox server running on port 5000"
-  );
+// Use the environment port if available (Crucial for Railway!)
+const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => {
+  console.log(`🔥 API-Powered Backend running on port ${PORT}`);
 });
