@@ -1,34 +1,54 @@
 import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import Editor from "@monaco-editor/react";
 
 const socket = io("http://localhost:5000");
 
 function EditorPage() {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+
+  const roomId = searchParams.get("room");
+
   const [code, setCode] = useState("// start coding...");
   const [users, setUsers] = useState([]);
   const [outputText, setOutputText] = useState("");
   const [aiSuggestion, setAiSuggestion] = useState("");
 
-  // NEW: time travel
   const [history, setHistory] = useState(["// start coding..."]);
   const [historyIndex, setHistoryIndex] = useState(0);
 
   const editorRef = useRef(null);
   const decorationsRef = useRef([]);
 
-  const roomId = "room1";
-
   const username =
     localStorage.getItem("username") ||
     "user_" + Math.floor(Math.random() * 1000);
 
   useEffect(() => {
-    socket.emit("join_room", { roomId, username });
+    if (!roomId) {
+      navigate("/dashboard");
+      return;
+    }
+
+    localStorage.setItem("username", username);
+
+    socket.emit("join_room", {
+      roomId,
+      username,
+    });
 
     socket.on("receive_code", (newCode) => {
       setCode(newCode);
-      setHistory((prev) => [...prev, newCode]);
+
+      setHistory((prev) => {
+        if (prev[prev.length - 1] === newCode) {
+          return prev;
+        }
+        return [...prev, newCode];
+      });
+
       setHistoryIndex((prev) => prev + 1);
     });
 
@@ -53,10 +73,13 @@ function EditorPage() {
           [
             {
               range: {
-                startLineNumber: position.lineNumber,
+                startLineNumber:
+                  position.lineNumber,
                 startColumn: position.column,
-                endLineNumber: position.lineNumber,
-                endColumn: position.column + 1,
+                endLineNumber:
+                  position.lineNumber,
+                endColumn:
+                  position.column + 1,
               },
               options: {
                 className: "remote-cursor",
@@ -73,7 +96,7 @@ function EditorPage() {
       socket.off("ai_suggestion");
       socket.off("receive_cursor");
     };
-  }, []);
+  }, [roomId, navigate]);
 
   useEffect(() => {
     const timeout = setTimeout(() => {
@@ -96,9 +119,14 @@ function EditorPage() {
   const handleChange = (value = "") => {
     setCode(value);
 
-    // NEW: save history snapshot
-    setHistory((prev) => [...prev, value]);
-    setHistoryIndex(history.length);
+    setHistory((prev) => {
+      if (prev[prev.length - 1] === value) {
+        return prev;
+      }
+      return [...prev, value];
+    });
+
+    setHistoryIndex((prev) => prev + 1);
 
     socket.emit("send_code", {
       roomId,
@@ -124,8 +152,13 @@ function EditorPage() {
     const updatedCode = `${code}\n\n${aiSuggestion}`;
 
     setCode(updatedCode);
-    setHistory((prev) => [...prev, updatedCode]);
-    setHistoryIndex(history.length);
+
+    setHistory((prev) => [
+      ...prev,
+      updatedCode,
+    ]);
+
+    setHistoryIndex((prev) => prev + 1);
 
     socket.emit("send_code", {
       roomId,
@@ -155,7 +188,9 @@ function EditorPage() {
     <div style={container}>
       {/* TOP BAR */}
       <div style={topBar}>
-        <span style={logo}>ITECify — {roomId}</span>
+        <span style={logo}>
+          ITECify — {roomId}
+        </span>
 
         <div>
           {users.map((u) => (
@@ -173,19 +208,20 @@ function EditorPage() {
       {/* TIMELINE */}
       <div style={timelineWrapper}>
         <span style={timelineLabel}>Replay</span>
+
         <input
-  type="range"
-  min="0"
-  max={history.length - 1}
-  value={historyIndex}
-  onChange={(e) => {
-    const index = Number(e.target.value);
-    setHistoryIndex(index);
-    setCode(history[index]);
-  }}
-  style={slider}
-  className="replay-slider"
-/>
+          type="range"
+          min="0"
+          max={Math.max(history.length - 1, 0)}
+          value={historyIndex}
+          onChange={(e) => {
+            const index = Number(e.target.value);
+            setHistoryIndex(index);
+            setCode(history[index]);
+          }}
+          style={slider}
+          className="replay-slider"
+        />
       </div>
 
       {/* MAIN */}
@@ -205,23 +241,32 @@ function EditorPage() {
         {/* OUTPUT */}
         <div style={output}>
           <p style={{ color: "#b3b3b3" }}>
-            {outputText || "Session output stream is waiting..."}
+            {outputText ||
+              "Session output stream is waiting..."}
           </p>
 
           {aiSuggestion && (
             <div style={aiBlock}>
-              <p style={aiTitle}>AI Suggestion</p>
+              <p style={aiTitle}>
+                AI Suggestion
+              </p>
 
               <pre style={aiCode}>
                 {aiSuggestion}
               </pre>
 
               <div style={aiButtons}>
-                <button style={actionBtn} onClick={handleAccept}>
+                <button
+                  style={actionBtn}
+                  onClick={handleAccept}
+                >
                   Accept
                 </button>
 
-                <button style={actionBtn} onClick={handleReject}>
+                <button
+                  style={actionBtn}
+                  onClick={handleReject}
+                >
                   Reject
                 </button>
               </div>
@@ -235,7 +280,7 @@ function EditorPage() {
 
 export default EditorPage;
 
-// STYLES
+// STYLES — EXACT CA ÎNAINTE
 const container = {
   height: "100vh",
   width: "100vw",
@@ -271,6 +316,7 @@ const timelineLabel = {
   letterSpacing: "1px",
   minWidth: "60px",
 };
+
 const slider = {
   width: "280px",
   height: "2px",
