@@ -11,7 +11,16 @@ const cors = require("cors");
 const OpenAI = require("openai");
 
 const app = express();
-app.use(cors());
+
+app.use(
+  cors({
+    origin: "*",
+  })
+);
+
+app.get("/", (req, res) => {
+  res.send("ITECify backend is running 🚀");
+});
 
 const server = http.createServer(app);
 
@@ -65,19 +74,16 @@ io.on("connection", (socket) => {
   });
 
   // LIVE CODE SYNC
-  socket.on(
-    "send_code",
-    ({ roomId, code }) => {
-      if (!rooms[roomId]) return;
+  socket.on("send_code", ({ roomId, code }) => {
+    if (!rooms[roomId]) return;
 
-      rooms[roomId].code = code;
+    rooms[roomId].code = code;
 
-      socket.to(roomId).emit(
-        "receive_code",
-        code
-      );
-    }
-  );
+    socket.to(roomId).emit(
+      "receive_code",
+      code
+    );
+  });
 
   // MULTI CURSOR
   socket.on(
@@ -97,58 +103,50 @@ io.on("connection", (socket) => {
   socket.on(
     "ai_request",
     async ({ roomId, code }) => {
-      console.log(
-        "AI REQUEST:",
-        roomId
-      );
+      console.log("AI REQUEST:", roomId);
 
       try {
         const completion =
-          await openai.chat.completions.create(
-            {
-              model: "gpt-4o-mini",
-              messages: [
-                {
-                  role: "system",
-                  content:
-                    "You are an AI pair-programming assistant inside a collaborative IDE. Return ONLY raw code suggestions. No markdown, no backticks, no explanations.",
-                },
-                {
-                  role: "user",
-                  content: code,
-                },
-              ],
-            }
-          );
+          await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+              {
+                role: "system",
+                content:
+                  "You are an AI pair-programming assistant inside a collaborative IDE. Return ONLY raw code suggestions. No markdown, no backticks, no explanations.",
+              },
+              {
+                role: "user",
+                content: code,
+              },
+            ],
+          });
 
         const suggestion =
-          completion.choices[0].message
-            .content;
+          completion.choices[0].message.content;
 
         io.to(roomId).emit(
           "ai_suggestion",
           suggestion
         );
       } catch (error) {
-        console.error(
-          "AI ERROR:",
-          error
+        console.error("AI ERROR:", error);
+
+        io.to(roomId).emit(
+          "ai_suggestion",
+          "❌ AI unavailable"
         );
       }
     }
   );
 
-  // RUN CODE IN DOCKER
+  // RUN CODE
   socket.on(
     "run_code",
-    async ({
-      roomId,
-      code,
-      input,
-    }) => {
+    async ({ roomId, code, input }) => {
       io.to(roomId).emit(
         "code_output",
-        "> Running Python 3 in Docker...\n"
+        "> Running Python 3...\n"
       );
 
       const uniqueId = `run_${Date.now()}_${socket.id}`;
@@ -175,30 +173,24 @@ io.on("connection", (socket) => {
           input || ""
         );
 
-        const cmd = `docker run --rm -v "${runDir}:/app" -w /app python:3.11-slim sh -c "python ${codeFile} < ${inputFile}"`;
+        const cmd = `python3 ${codeFile} < ${inputFile}`;
 
         exec(
           cmd,
-          { timeout: 30000 },
-          async (
-            error,
-            stdout,
-            stderr
-          ) => {
+          {
+            cwd: runDir,
+            timeout: 30000,
+          },
+          async (error, stdout, stderr) => {
             let outputMessage = "";
 
             if (error) {
               if (error.killed) {
                 outputMessage =
                   "> 🚨 TIMEOUT ERROR: Execution exceeded 30 seconds.\n";
-
-                exec(
-                  `docker ps -q --filter ancestor=python:3.11-slim | xargs -r docker kill`
-                );
               } else {
                 outputMessage = `> ❌ RUNTIME ERROR:\n${
-                  stderr ||
-                  error.message
+                  stderr || error.message
                 }\n`;
               }
             } else {
@@ -227,7 +219,7 @@ io.on("connection", (socket) => {
         );
       } catch (err) {
         console.error(
-          "DOCKER ERROR:",
+          "PYTHON EXEC ERROR:",
           err
         );
 
@@ -257,8 +249,7 @@ io.on("connection", (socket) => {
       (roomId) => {
         rooms[roomId].users =
           rooms[roomId].users.filter(
-            (u) =>
-              u.id !== socket.id
+            (u) => u.id !== socket.id
           );
 
         io.to(roomId).emit(
@@ -270,8 +261,10 @@ io.on("connection", (socket) => {
   });
 });
 
-server.listen(5000, () => {
+const PORT = process.env.PORT || 5000;
+
+server.listen(PORT, () => {
   console.log(
-    "🔥 WebSocket + AI + Docker Sandbox server running on port 5000"
+    `🔥 ITECify backend running on port ${PORT}`
   );
 });
