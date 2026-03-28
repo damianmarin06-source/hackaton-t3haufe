@@ -3,8 +3,10 @@ import { io } from "socket.io-client";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import Editor from "@monaco-editor/react";
 
-const socket = io("http://localhost:5000");
-
+const socket = io(" https://9f1f-89-238-252-115.ngrok-free.app");
+extraHeaders: {
+    "ngrok-skip-browser-warning": "true"
+  }
 function EditorPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
