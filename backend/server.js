@@ -12,7 +12,7 @@ const io = new Server(server, {
   cors: { origin: "*" },
 });
 
-// room state
+// ROOM STATE
 let rooms = {};
 
 io.on("connection", (socket) => {
@@ -39,12 +39,15 @@ io.on("connection", (socket) => {
   });
 
   // LIVE CODE SYNC
-  socket.on("send_code", ({ roomId, code }) => {
-    if (rooms[roomId]) {
+  socket.on(
+    "send_code",
+    ({ roomId, code }) => {
+      if (!rooms[roomId]) return;
+
       rooms[roomId].code = code;
       socket.to(roomId).emit("receive_code", code);
     }
-  });
+  );
 
   // MULTI CURSOR
   socket.on("cursor_move", ({ roomId, username, position }) => {
@@ -109,6 +112,29 @@ io.on("connection", (socket) => {
       rooms[roomId].users = rooms[roomId].users.filter((u) => u.id !== socket.id);
       io.to(roomId).emit("users_update", rooms[roomId].users);
     }
+  );
+
+  // DISCONNECT
+  socket.on("disconnect", () => {
+    console.log(
+      "User disconnected:",
+      socket.id
+    );
+
+    Object.keys(rooms).forEach(
+      (roomId) => {
+        rooms[roomId].users =
+          rooms[roomId].users.filter(
+            (u) =>
+              u.id !== socket.id
+          );
+
+        io.to(roomId).emit(
+          "users_update",
+          rooms[roomId].users
+        );
+      }
+    );
   });
 });
 
