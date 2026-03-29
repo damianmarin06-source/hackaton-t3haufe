@@ -4,7 +4,7 @@ import Editor from "@monaco-editor/react";
 import OutputPanel from "./OutputPanel";
 
 // Make sure your backend is actually running on port 5000!
-const socket = io("https://9f1f-89-238-252-115.ngrok-free.app", {
+const socket = io("https://338d-89-238-252-115.ngrok-free.app", {
   extraHeaders: {
     "ngrok-skip-browser-warning": "true"
   }
